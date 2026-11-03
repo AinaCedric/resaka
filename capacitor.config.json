@@ -1,0 +1,11 @@
+{
+  "appId": "mg.ainacedric.resaka",
+  "appName": "Resaka",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": true
+  },
+  "plugins": {
+    "SystemBars": { "insetsHandling": "css", "style": "DEFAULT" }
+  }
+}

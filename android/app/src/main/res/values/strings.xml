@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Resaka</string>
+    <string name="title_activity_main">Resaka</string>
+    <string name="package_name">mg.ainacedric.resaka</string>
+    <string name="custom_url_scheme">mg.ainacedric.resaka</string>
+</resources>

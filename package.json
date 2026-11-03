@@ -1,0 +1,23 @@
+{
+  "name": "resaka",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@breezystack/lamejs": "^1.2.7",
+    "@capacitor-community/keep-awake": "^8.0.1",
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/filesystem": "^8.1.5",
+    "@capacitor/share": "^8.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.6.0",
+    "vite": "^8.3.5"
+  }
+}
