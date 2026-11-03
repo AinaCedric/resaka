@@ -42,8 +42,7 @@ async function jsonRequest(method, url, body) {
   return data;
 }
 
-async function withRetry(fn, onWait) {
-  const delays = [4000, 12000, 30000];
+async function withRetry(fn, onWait, delays = [4000, 12000, 30000]) {
   for (let i = 0; ; i++) {
     try {
       return await fn();
@@ -174,7 +173,7 @@ function parseJsonLoose(text) {
 /**
  * Appel generateContent avec sortie JSON. Dégrade la config si le modèle la refuse.
  */
-export async function generateJson({ key, model, parts, schema, onWait, temperature = 0.2 }) {
+async function generateJsonOne({ key, model, parts, schema, onWait, temperature = 0.2, delays }) {
   const url = `${BASE}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
   const configs = [
     { temperature, responseMimeType: 'application/json', responseSchema: schema },
@@ -186,7 +185,7 @@ export async function generateJson({ key, model, parts, schema, onWait, temperat
     const body = { contents: [{ role: 'user', parts }] };
     if (gc) body.generationConfig = gc;
     try {
-      const data = await withRetry(() => jsonRequest('POST', url, body), onWait);
+      const data = await withRetry(() => jsonRequest('POST', url, body), onWait, delays);
       const { text, finish } = extractText(data);
       if (!text) throw new Error(`Réponse vide (${finish || 'inconnu'}).`);
       return parseJsonLoose(text);
@@ -194,6 +193,56 @@ export async function generateJson({ key, model, parts, schema, onWait, temperat
       lastErr = e;
       const configProblem = e instanceof ApiError && e.status === 400 && /(schema|generation_?config|response_?mime|Unknown name|Invalid JSON payload)/i.test(e.message);
       if (!configProblem) throw e;
+    }
+  }
+  throw lastErr;
+}
+
+const cooldown = new Map();
+
+function modelScore(id) {
+  const v = parseFloat((/gemini-(\d+(\.\d+)?)/.exec(id) || [])[1] || '0');
+  let sc = v * 100;
+  if (/flash/.test(id)) sc += 50;
+  if (/lite/.test(id)) sc -= 40;
+  if (/pro/.test(id)) sc -= 30;
+  if (/(preview|exp)/.test(id)) sc -= 8;
+  return sc;
+}
+
+// Modèles de secours : autres "flash" / "lite" connus pour cette clé, du plus récent au plus ancien
+export function fallbackChain(chosen, all = []) {
+  const others = all
+    .filter((id) => id !== chosen && /flash/.test(id) && !/(thinking|8b)/.test(id))
+    .sort((a, b) => modelScore(b) - modelScore(a));
+  return [chosen, ...others].slice(0, 4);
+}
+
+/**
+ * Essaie le modèle choisi (1 seul nouvel essai court), puis bascule sur les modèles de secours
+ * si Gemini est surchargé (503) ou si le quota est atteint (429).
+ */
+export async function generateJson({ key, model, parts, schema, onWait, temperature = 0.2, fallbacks = [] }) {
+  const now = Date.now();
+  const all = [model, ...fallbacks.filter((m) => m !== model)];
+  // les modèles récemment surchargés passent en dernier
+  const chain = [...all.filter((m) => !(cooldown.get(m) > now)), ...all.filter((m) => cooldown.get(m) > now)];
+  let lastErr;
+  for (let i = 0; i < chain.length; i++) {
+    const last = i === chain.length - 1;
+    try {
+      return await generateJsonOne({
+        key, model: chain[i], parts, schema, temperature,
+        delays: last ? [3000, 8000, 20000] : [2500],
+        onWait: (sec) => onWait?.(sec, chain[i]),
+      });
+    } catch (e) {
+      lastErr = e;
+      const retriable = e instanceof ApiError && [429, 500, 502, 503, 504].includes(e.status);
+      const modelMissing = e instanceof ApiError && (e.status === 404 || (e.status === 400 && /not (found|supported)/i.test(e.message)));
+      if (retriable || modelMissing) cooldown.set(chain[i], Date.now() + 10 * 60 * 1000);
+      if (!(retriable || modelMissing) || last) throw e;
+      onWait?.(0, chain[i + 1], `${chain[i]} indisponible (${e.status}), essai avec ${chain[i + 1]}…`);
     }
   }
   throw lastErr;

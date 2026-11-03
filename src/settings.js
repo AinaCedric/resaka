@@ -4,7 +4,8 @@ const KEY = 'resaka.settings';
 const DEFAULTS = {
   provider: 'gemini',          // 'gemini' | 'whisper'
   geminiKey: '',
-  geminiModel: '',             // choisi après "Tester la clé"
+  geminiModel: '',
+  geminiModels: [],            // modèles disponibles pour la clé (secours automatique)             // choisi après "Tester la clé"
   whisperUrl: '',              // ex. http://192.168.1.20:8000
   whisperKey: '',
   vocabulary: '',              // noms propres, jargon, sigles

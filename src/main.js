@@ -662,7 +662,7 @@ function renderSettings() {
       const current = getSettings().geminiModel;
       const chosen = models.some((x) => x.id === current) ? current : pickDefaultModel(models);
       sel.innerHTML = models.map((x) => `<option value="${esc(x.id)}" ${x.id === chosen ? 'selected' : ''}>${esc(x.label)} (${esc(x.id)})</option>`).join('');
-      saveSettings({ geminiModel: chosen });
+      saveSettings({ geminiModel: chosen, geminiModels: models.map((x) => x.id) });
       toast(`Clé valide ✔ Modèle : ${chosen}`);
     } catch (e) {
       toast(e.message, 'error');

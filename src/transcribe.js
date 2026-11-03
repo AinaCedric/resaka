@@ -1,9 +1,21 @@
 // Orchestration : transcription des morceaux audio + compte rendu
 import { db } from './db.js';
-import { getSettings } from './settings.js';
-import { generateJson, audioPart, uploadFile } from './gemini.js';
+import { getSettings, saveSettings } from './settings.js';
+import { generateJson, audioPart, uploadFile, fallbackChain, listModels } from './gemini.js';
 import { whisperTranscribe } from './whisper.js';
 import { fmtTime, parseTime } from './util.js';
+
+// Charge (une fois) la liste des modèles pour pouvoir basculer en cas de surcharge
+async function ensureModels() {
+  const s = getSettings();
+  if (s.geminiModels?.length || !s.geminiKey) return getSettings();
+  try {
+    const list = await listModels(s.geminiKey);
+    return saveSettings({ geminiModels: list.map((m) => m.id) });
+  } catch {
+    return getSettings();
+  }
+}
 
 const WINDOW = 600; // fenêtre (s) pour les longs fichiers importés
 
@@ -97,7 +109,7 @@ function toAbsolute(raw, offset, window, chunkDur) {
 }
 
 async function transcribeChunk(m, chunk, onStatus) {
-  const s = getSettings();
+  const s = await ensureModels();
   const blob = await db.getAudio(m.id, chunk.idx);
   if (!blob) throw new Error('Audio introuvable pour ce segment.');
   const name = `${m.title || 'reunion'}-${chunk.idx}`;
@@ -109,13 +121,14 @@ async function transcribeChunk(m, chunk, onStatus) {
 
   if (!s.geminiKey) throw new Error('Ajoute ta clé API Gemini dans les Réglages.');
   if (!s.geminiModel) throw new Error('Choisis un modèle Gemini dans les Réglages (bouton « Tester la clé »).');
-  const onWait = (sec) => onStatus?.(`Gemini occupé, nouvel essai dans ${sec} s…`);
+  const fb = fallbackChain(s.geminiModel, s.geminiModels).slice(1);
+  const onWait = (sec, mdl, msg) => onStatus?.(msg || `Gemini occupé, nouvel essai dans ${sec} s…`);
   const long = chunk.duration && chunk.duration > WINDOW * 1.5;
 
   if (!long) {
     const part = await audioPart(s.geminiKey, blob, chunk.mime, name);
     const prompt = transcriptionPrompt({ vocabulary: s.vocabulary, context: contextOf(m, chunk.start), speakers: speakersOf(m) });
-    const out = await generateJson({ key: s.geminiKey, model: s.geminiModel, parts: [part, { text: prompt }], schema: SEG_SCHEMA, onWait });
+    const out = await generateJson({ key: s.geminiKey, model: s.geminiModel, parts: [part, { text: prompt }], schema: SEG_SCHEMA, onWait, fallbacks: fb });
     return toAbsolute(out.segments || [], chunk.start, null, chunk.duration);
   }
 
@@ -130,7 +143,7 @@ async function transcribeChunk(m, chunk, onStatus) {
     const win = [w * WINDOW, Math.min(chunk.duration, (w + 1) * WINDOW)];
     onStatus?.(`Transcription ${fmtTime(win[0])} → ${fmtTime(win[1])}…`);
     const prompt = transcriptionPrompt({ vocabulary: s.vocabulary, context: contextOf(m, win[0]), speakers: speakersOf(m), window: win });
-    const out = await generateJson({ key: s.geminiKey, model: s.geminiModel, parts: [part, { text: prompt }], schema: SEG_SCHEMA, onWait });
+    const out = await generateJson({ key: s.geminiKey, model: s.geminiModel, parts: [part, { text: prompt }], schema: SEG_SCHEMA, onWait, fallbacks: fb });
     const segs = toAbsolute(out.segments || [], 0, win, null).filter((x) => x.start >= win[0] - 3 && x.start < win[1] + 3);
     m = await db.update(m.id, (mm) => {
       mergeSegments(mm, segs);
@@ -207,7 +220,7 @@ export function transcriptText(m, { withSpeakers = true } = {}) {
 }
 
 export async function summarize(id) {
-  const s = getSettings();
+  const s = await ensureModels();
   if (!s.geminiKey || !s.geminiModel) throw new Error('Le compte rendu nécessite une clé Gemini (Réglages).');
   const m = await db.getMeeting(id);
   if (!m.segments?.length) throw new Error('Aucune transcription à résumer.');
@@ -227,7 +240,8 @@ ${transcriptText(m)}`;
   try {
     const out = await generateJson({
       key: s.geminiKey, model: s.geminiModel, parts: [{ text: prompt }], schema: SUMMARY_SCHEMA, temperature: 0.3,
-      onWait: (sec) => emit(id, `Gemini occupé, nouvel essai dans ${sec} s…`),
+      fallbacks: fallbackChain(s.geminiModel, s.geminiModels).slice(1),
+      onWait: (sec, mdl, msg) => emit(id, msg || `Gemini occupé, nouvel essai dans ${sec} s…`),
     });
     await db.update(id, (fresh) => {
       fresh.summary = { ...out, lang: s.summaryLang, at: Date.now() };
